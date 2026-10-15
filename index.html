@@ -122,8 +122,8 @@ footer a{color:var(--muted-foreground)}
     <div>
       <span class="form-label">播放倍速</span>
       <div class="viz-row" id="sim-speed" role="group" aria-label="播放倍速">
-        <button class="seg-btn" data-speed="1" type="button">1×</button>
-        <button class="seg-btn is-selected" data-speed="5" type="button">5×</button>
+        <button class="seg-btn is-selected" data-speed="1" type="button">1×</button>
+        <button class="seg-btn" data-speed="5" type="button">5×</button>
         <button class="seg-btn" data-speed="20" type="button">20×</button>
       </div>
     </div>
@@ -208,7 +208,7 @@ footer a{color:var(--muted-foreground)}
     '本次任务完成：共修改 2 个文件（speed_report.md、tier_table.py），8 档上下文回归测试全部通过。如果需要，我可以把这份说明压缩成一页速查卡。'
   ].join('\n\n');
 
-  var state = { tab: 'glm', tier: 3, task: 'mid', speed: 5 };
+  var state = { tab: 'glm', tier: 3, task: 'mid', speed: 1 };
   var lanes = []; // {name, b1, b2, b3, el}
   var iv = 0, vStart = 0, run = null, laneLive = null;
 
