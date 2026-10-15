@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 速度模拟器 · GLM-5.3-Flash / Qwen3.8-Flash-Next 本地部署体感</title>
+<meta name="description" content="模拟 Agent 回合的三段耗时（预填充、思考、逐字输出），基于 M5 Ultra 实测数据与云端公开口径，感受本地部署 GLM-5.3-Flash 与 Qwen3.8-Flash-Next 的真实速度。">
+<style>
+:root{
+  --background:#f7f6f3;--foreground:#26241f;--card:#ffffff;--muted:#efece6;--muted-foreground:#6f6a60;
+  --primary:#26241f;--primary-foreground:#ffffff;--border:#e2dfd8;
+  --viz-series-1:#2563eb;--viz-series-2:#ea580c;--viz-series-3:#7c3aed;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --background:#171614;--foreground:#eceae5;--card:#201f1c;--muted:#2a2825;--muted-foreground:#a39e93;
+    --primary:#eceae5;--primary-foreground:#171614;--border:#3a3733;
+    --viz-series-1:#6b9aff;--viz-series-2:#ff9d5c;--viz-series-3:#b18cff;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;font-size:14px;line-height:1.6;color:var(--foreground);background:var(--background);padding:28px 16px 60px}
+.wrap{max-width:900px;margin:0 auto}
+header h1{font-size:24px;font-weight:600;margin-bottom:4px}
+header .sub{color:var(--muted-foreground);margin-bottom:18px}
+.text-muted{color:var(--muted-foreground)}.text-small{font-size:12px}.tabular-nums{font-variant-numeric:tabular-nums}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px}
+.viz-stat{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 14px}
+.viz-stat-value{font-size:22px;font-weight:500;margin:2px 0}
+.viz-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.viz-controls{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
+.viz-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.nav{display:flex;gap:4px;flex-wrap:wrap}
+.nav-pills .nav-link{border:1px solid var(--border);background:transparent;border-radius:999px;padding:4px 12px;cursor:pointer;color:var(--foreground);font-size:13px}
+.nav-pills .nav-link.active{background:var(--primary);color:var(--primary-foreground)}
+.btn{border:1px solid var(--border);background:var(--card);border-radius:8px;padding:5px 14px;cursor:pointer;color:var(--foreground);font-size:13px}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--muted-foreground)}
+.form-select{padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--foreground);min-width:300px;font-size:13px}
+.form-label{font-size:12px;color:var(--muted-foreground);margin-bottom:2px;display:block}
+.progress{height:8px;background:var(--muted);border-radius:4px;overflow:hidden;margin:4px 0}
+.progress-bar{height:100%;background:var(--viz-series-2);width:0}
+#agent-speed-sim .seg-btn{background:transparent;border:1px solid var(--border);border-radius:6px;padding:2px 10px;color:var(--foreground);cursor:pointer;font-size:13px}
+#agent-speed-sim .seg-btn.is-selected{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+#agent-speed-sim .term{font-size:13px;line-height:1.55;max-height:240px;overflow-y:auto}
+#agent-speed-sim .term-user{color:var(--muted-foreground);margin-bottom:6px}
+#agent-speed-sim .term-phase{margin:6px 0 4px;color:var(--foreground)}
+#agent-speed-sim .think-block{color:var(--muted-foreground);font-style:italic;animation:sim-pulse 1.6s ease-in-out infinite}
+#agent-speed-sim .answer-text{white-space:pre-wrap;color:var(--foreground)}
+#agent-speed-sim .caret{display:inline-block;width:7px;background:var(--primary);animation:sim-blink .9s steps(1) infinite}
+@keyframes sim-pulse{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes sim-blink{0%,100%{opacity:1}50%{opacity:0}}
+@media (prefers-reduced-motion: reduce){#agent-speed-sim .think-block,#agent-speed-sim .caret{animation:none}}
+#agent-speed-sim .lane{display:flex;align-items:center;gap:8px;margin-top:6px}
+#agent-speed-sim .lane-name{flex:0 0 218px;font-size:12px;color:var(--muted-foreground);text-align:right}
+#agent-speed-sim .lane-track{flex:1;display:flex;height:14px;border-radius:4px;overflow:hidden;background:var(--muted);min-width:0}
+#agent-speed-sim .lane-track span{height:100%;min-width:0}
+#agent-speed-sim .lane-total{flex:0 0 64px;font-size:12px;color:var(--foreground)}
+#agent-speed-sim .lg{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 10px;vertical-align:-1px}
+section.appendix{margin-top:36px}
+section.appendix h2{font-size:16px;font-weight:600;margin-bottom:8px}
+section.appendix p{color:var(--muted-foreground);margin-bottom:8px}
+table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+th,td{text-align:left;padding:5px 10px;border-bottom:1px solid var(--border)}
+th{color:var(--muted-foreground);font-weight:500}
+td.num{font-variant-numeric:tabular-nums}
+footer{margin-top:32px;color:var(--muted-foreground);font-size:12px}
+footer a{color:var(--muted-foreground)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Agent 速度模拟器</h1>
+  <div class="sub">给准备买 Mac Studio 本地部署 GLM-5.3-Flash / Qwen3.8-Flash-Next 的人：一个回合的 Agent 到底快在哪、慢在哪</div>
+</header>
+
+<div id="agent-speed-sim">
+  <style>
+    #agent-speed-sim .seg-btn { background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 2px 10px; color: var(--foreground); }
+    #agent-speed-sim .seg-btn.is-selected { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+    #agent-speed-sim .term { font-size: 13px; line-height: 1.55; max-height: 240px; overflow-y: auto; }
+    #agent-speed-sim .term-user { color: var(--muted-foreground); margin-bottom: 6px; }
+    #agent-speed-sim .term-phase { margin: 6px 0 4px; color: var(--foreground); }
+    #agent-speed-sim .think-block { color: var(--muted-foreground); font-style: italic; animation: sim-pulse 1.6s ease-in-out infinite; }
+    #agent-speed-sim .answer-text { white-space: pre-wrap; color: var(--foreground); }
+    #agent-speed-sim .caret { display: inline-block; width: 7px; background: var(--primary); animation: sim-blink 0.9s steps(1) infinite; }
+    @keyframes sim-pulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+    @keyframes sim-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) { #agent-speed-sim .think-block, #agent-speed-sim .caret { animation: none; } }
+    #agent-speed-sim .lane { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+    #agent-speed-sim .lane-name { flex: 0 0 218px; font-size: 12px; color: var(--muted-foreground); text-align: right; }
+    #agent-speed-sim .lane-track { flex: 1; display: flex; height: 14px; border-radius: 4px; overflow: hidden; background: var(--muted); min-width: 0; }
+    #agent-speed-sim .lane-track span { height: 100%; min-width: 0; }
+    #agent-speed-sim .lane-total { flex: 0 0 64px; font-size: 12px; color: var(--foreground); }
+    #agent-speed-sim .lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+  </style>
+
+  <h3>Agent 速度模拟器 <span class="text-muted text-small">预填充 → 思考 → 逐字输出，数据为实测值</span></h3>
+
+  <div class="viz-controls" style="gap:10px 18px;">
+    <div class="nav nav-pills" role="tablist" aria-label="运行环境">
+      <button class="nav-link active" id="tab-glm" role="tab" aria-controls="sim-shared-panel" aria-selected="true" data-tab="glm" type="button">本地 GLM-5.3-Flash（M5U）</button>
+      <button class="nav-link" id="tab-qwen" role="tab" aria-controls="sim-shared-panel" aria-selected="false" data-tab="qwen" type="button">本地 Qwen3.8-Next（M5U）</button>
+      <button class="nav-link" id="tab-cflash" role="tab" aria-controls="sim-shared-panel" aria-selected="false" data-tab="cflash" type="button">云端 Flash</button>
+      <button class="nav-link" id="tab-cfx" role="tab" aria-controls="sim-shared-panel" aria-selected="false" data-tab="cfx" type="button">云端 FlashX</button>
+    </div>
+    <div>
+      <label class="form-label" for="sim-tier">上下文档位</label>
+      <select id="sim-tier" class="form-select"></select>
+    </div>
+  </div>
+  <div class="viz-controls" style="gap:10px 18px; margin-top:8px;">
+    <div>
+      <span class="form-label">任务量级</span>
+      <div class="viz-row" id="sim-task" role="group" aria-label="任务量级">
+        <button class="seg-btn" data-task="light" type="button">轻 · 600字</button>
+        <button class="seg-btn is-selected" data-task="mid" type="button">中 · 2000字</button>
+        <button class="seg-btn" data-task="heavy" type="button">重 · 全文</button>
+      </div>
+    </div>
+    <div>
+      <span class="form-label">播放倍速</span>
+      <div class="viz-row" id="sim-speed" role="group" aria-label="播放倍速">
+        <button class="seg-btn" data-speed="1" type="button">1×</button>
+        <button class="seg-btn is-selected" data-speed="5" type="button">5×</button>
+        <button class="seg-btn" data-speed="20" type="button">20×</button>
+      </div>
+    </div>
+    <div class="viz-row" style="align-self:flex-end;">
+      <button class="btn btn-primary" id="sim-run" type="button">运行模拟</button>
+      <button class="btn btn-ghost" id="sim-clear" type="button" data-tooltip="清空下方对比泳道">清空记录</button>
+    </div>
+  </div>
+
+  <div class="viz-grid" style="margin-top:12px;">
+    <div class="viz-stat"><div class="text-muted">首字等待（预填充+思考）</div><div class="viz-stat-value tabular-nums" id="stat-ttft">—</div><div class="text-small text-muted tabular-nums" id="stat-ttft-sub">&nbsp;</div></div>
+    <div class="viz-stat"><div class="text-muted">解码速度</div><div class="viz-stat-value tabular-nums" id="stat-tg">—</div><div class="text-small text-muted tabular-nums" id="stat-tg-sub">&nbsp;</div></div>
+    <div class="viz-stat"><div class="text-muted">已用时 / 预计总时长</div><div class="viz-stat-value tabular-nums" id="stat-elapsed">—</div><div class="text-small text-muted tabular-nums" id="stat-elapsed-sub">&nbsp;</div></div>
+  </div>
+
+  <div class="card" id="sim-shared-panel" role="tabpanel" style="margin-top:12px;">
+    <div class="term" id="sim-term" role="log" aria-live="polite"></div>
+  </div>
+
+  <div style="margin-top:14px;">
+    <div class="text-small text-muted">
+      泳道对比（每次运行记一条，同一时间轴）
+      <span class="lg" style="background:var(--viz-series-2)"></span>预填充
+      <span class="lg" style="background:var(--viz-series-3)"></span>思考
+      <span class="lg" style="background:var(--viz-series-1)"></span>可见输出
+    </div>
+    <div id="sim-lanes" aria-live="polite"></div>
+    <div class="text-small text-muted tabular-nums" id="sim-ref" style="margin-top:6px;"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var CHARS_PER_TOKEN = 1.67;
+  var HUMAN_READ = 10; // 人类默读 字/秒
+
+  var GLM_TIERS = [
+    { k: '1K', ctx: 1000, pp: 459.2, tg: 37.3 },
+    { k: '4K', ctx: 4000, pp: 1221, tg: 41.6 },
+    { k: '8K', ctx: 8000, pp: 1960, tg: 72.4 },
+    { k: '16K', ctx: 16000, pp: 1971, tg: 99.1 },
+    { k: '32K', ctx: 32000, pp: 1953, tg: 87.4 },
+    { k: '64K', ctx: 64000, pp: 1925, tg: 60.5 },
+    { k: '128K', ctx: 128000, pp: 1887, tg: 96.1 },
+    { k: '195K', ctx: 195000, pp: 1835, tg: 42.6 }
+  ];
+  var QWEN_TIERS = [
+    { k: '16K', ctx: 16000, pp: 4673, tg: 115.7 },
+    { k: '32K', ctx: 32000, pp: 4772, tg: 110.2 },
+    { k: '64K', ctx: 64000, pp: 4698, tg: 139.9 },
+    { k: '128K', ctx: 128000, pp: 4560, tg: 129.0 }
+  ];
+  var TABS = {
+    glm:   { name: '本地 M5U · GLM-5.3-Flash-oQ4e', tiers: GLM_TIERS, cloud: false },
+    qwen:  { name: '本地 M5U · Qwen3.8-Next-oQ4e', tiers: QWEN_TIERS, cloud: false },
+    cflash:{ name: '云端 GLM-5.3-Flash', cloud: true, tg: 60, prefillS: 1.0, ctxLabel: '128K 上下文 · 已命中缓存' },
+    cfx:   { name: '云端 GLM-5.3-FlashX', cloud: true, tg: 200, prefillS: 0.8, ctxLabel: '128K 上下文 · 已命中缓存' }
+  };
+  var TASKS = {
+    light: { label: '轻', think: 300, chars: 600 },
+    mid:   { label: '中', think: 1500, chars: 2000 },
+    heavy: { label: '重', think: 4000, chars: Infinity }
+  };
+
+  var ANSWER = [
+    '修复完成。下面把这次排查的结论交付给你——顺便把"Agent 为什么时快时慢"彻底讲清楚。',
+    '一次 Agent 回合的耗时，几乎全部落在三段里：预填充、思考、逐字输出。你在屏幕上感受到的每一种"卡"，都能对应到其中一段。',
+    '第一段叫预填充（prefill）。你发出消息时，Agent 看到的远不止你这一句话：系统提示、全部历史对话、打开过的文件、每次工具调用的返回结果，都被打包成一个上下文，一次性喂给模型。预填充是高度并行的计算，速度通常高达每秒一两千 token，但它要处理的总量可以非常大。上下文堆到 195K 时，哪怕每秒能算 1835 个 token，也要等上 106 秒才吐出第一个字。',
+    '这就是"对话越久、响应越慢"的根源：不是模型变笨了，而是它每次开口前，都要把你们几个月攒下的记录从头读一遍。',
+    '云端服务用缓存缓解这件事：连续会话里没有变化的前缀可以直接复用 KV 缓存，预填充时间几乎归零，所以云端 Agent 通常"秒回第一个字"。本地单机没有跨请求的缓存服务，冷启动每次都要重算，长上下文的首字延迟因此远高于云端。',
+    '第二段叫思考（thinking）。GLM-5.3 系列是推理模型：正式回答之前，它会先在内部打草稿、列计划、自我检查。这部分 token 你完全看不见，却按同样的速度实实在在地计时。思考长度和任务难度正相关——改一个错别字可能只花几百 token，"重构这个模块"可能烧掉几千甚至上万。',
+    '你在界面上看到的"思考中…"转圈，转的就是这段。Flash 系列主打低延迟，靠的就是压缩这一段，外加更快的解码。',
+    '第三段才是你看到的逐字输出（decode）。它受显存带宽限制，是逐 token 的串行生成，大家常说的"tok/s"就是它的速度。换算成中文：GLM 这类大词表模型下，1 个 token 约合 1.5 到 1.8 个汉字，所以 60 tok/s 大约是每秒 100 个汉字——而人类默读速度只有每秒 10 字左右。',
+    '一个反直觉的结论：只要是正常服务的模型，"输出太慢、看不过来"很少成立。真正让人烦躁的，是前两段的干等：等首字、等思考。',
+    '这次实测的数据里有一条值得单独说：解码速度并不随上下文变长而单调下降。',
+    '同一台 M5 Ultra、同一个 4bit 的 GLM-5.3-Flash：1K 上下文只有 37.3 tok/s，16K 反而冲到全场最快的 99.1，32K 回落到 87.4，64K 掉到 60.5，128K 又回到 96.1，195K 再落到 42.6。上下文更短或更长都未必更快，这条曲线是锯齿状的。',
+    '两端各有解释。1K 档的 37.3 里，相当一部分是固定开销——程序启动、显存搬运——摊在了很短的测量时间上；195K 档的 42.6 则是 KV 缓存真的变大之后，每生成一个 token 都要回头看一遍更长的"记忆"。中间的锯齿则来自调度和带宽的波动，属于正常现象，不是坏了。',
+    '工程上的结论：短任务用小上下文档位，反而可能踩到固定开销的坑；中等上下文（16K 附近）通常是本地解码的甜点区；真正的长文档分析要降低心理预期——首字以分钟计，但输出一旦开始，速度依然可用。',
+    '云端和本地怎么选，取决于你在为什么付费。云端按 token 计费，买到的是"没有等待的首字"和"按需扩容的算力"；本地付一次电费和显存占用，买到的是"数据不出门"和"不限量地跑"。',
+    '体感的分水岭在上下文长度。128K 以内的日常任务，云端 Flash 与本地旗舰机差距不大；再往上，云端缓存的优势会拉开一个数量级——因为本地的预填充时间会线性膨胀，而云端的缓存命中几乎不变。',
+    '最后给三条可操作的建议。第一，长会话定期压缩归档，别让上下文无限制生长，那是你首字延迟的最大变量。第二，本地跑长文档先切块、摘要、再汇总，避免整本塞进 195K 档。第三，交互式问答选云端缓存命中，批量任务选本地高解码档位，让两种付费方式各自花在刀刃上。',
+    '本次任务完成：共修改 2 个文件（speed_report.md、tier_table.py），8 档上下文回归测试全部通过。如果需要，我可以把这份说明压缩成一页速查卡。'
+  ].join('\n\n');
+
+  var state = { tab: 'glm', tier: 3, task: 'mid', speed: 5 };
+  var lanes = []; // {name, b1, b2, b3, el}
+  var iv = 0, vStart = 0, run = null, laneLive = null;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var root = $('agent-speed-sim');
+  var term = $('sim-term'), tierSel = $('sim-tier'), lanesBox = $('sim-lanes');
+
+  function fmtS(s) {
+    if (s < 1) return (s * 1000).toFixed(0) + ' 毫秒';
+    if (s < 60) return s.toFixed(1) + ' 秒';
+    return Math.floor(s / 60) + ' 分 ' + Math.round(s % 60) + ' 秒';
+  }
+  function fmtN(n) { return n.toLocaleString('en-US', { maximumFractionDigits: 1 }); }
+
+  function tierOf(tab, idx) { return TABS[tab].tiers[idx]; }
+
+  function buildTierOptions() {
+    var t = TABS[state.tab];
+    tierSel.innerHTML = '';
+    if (t.cloud) {
+      var o = document.createElement('option');
+      o.textContent = t.ctxLabel + '（首字等待 ≈ ' + fmtS(t.prefillS) + '）';
+      tierSel.appendChild(o);
+      tierSel.disabled = true;
+    } else {
+      tierSel.disabled = false;
+      if (state.tier >= t.tiers.length) state.tier = 3;
+      t.tiers.forEach(function (tr, i) {
+        var op = document.createElement('option');
+        op.value = i;
+        op.textContent = tr.k + ' · 预填充 ' + fmtN(tr.pp) + ' tok/s · 解码 ' + tr.tg + ' tok/s';
+        tierSel.appendChild(op);
+      });
+      tierSel.value = state.tier;
+    }
+  }
+
+  function segBtns(groupSel, attr, cb) {
+    root.querySelectorAll(groupSel + ' .seg-btn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (run) return;
+        root.querySelectorAll(groupSel + ' .seg-btn').forEach(function (x) { x.classList.remove('is-selected'); });
+        b.classList.add('is-selected');
+        cb(b.dataset[attr]);
+        saveState();
+      });
+    });
+  }
+
+  function saveState() {
+    if (window.zcode && window.zcode.setWidgetState) {
+      window.zcode.setWidgetState({ modelContent: { tab: state.tab, tier: state.tier, task: state.task } }).catch(function () {});
+    }
+  }
+
+  // 初始化
+  buildTierOptions();
+  segBtns('#sim-task', 'task', function (v) { state.task = v; });
+  segBtns('#sim-speed', 'speed', function (v) { state.speed = +v; });
+  tierSel.addEventListener('change', function () { state.tier = +tierSel.value; saveState(); });
+  root.querySelectorAll('.nav-link[data-tab]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (run) return;
+      state.tab = b.dataset.tab;
+      buildTierOptions();
+      saveState();
+    });
+  });
+  $('sim-ref').textContent = '参考：你本机 ZCode 使用库实测，GLM-5.3-Flash 真实 Agent 任务（会话压缩）中位输出 7,401 token / 66.5 秒 ≈ 端到端 111 tok/s（含思考）；中文换算按 1 token ≈ ' + CHARS_PER_TOKEN + ' 汉字。';
+
+  function makeLane(name) {
+    var row = document.createElement('div');
+    row.className = 'lane';
+    row.innerHTML = '<div class="lane-name"></div><div class="lane-track" role="img"><span style="background:var(--viz-series-2)"></span><span style="background:var(--viz-series-3)"></span><span style="background:var(--viz-series-1)"></span></div><div class="lane-total tabular-nums"></div>';
+    row.querySelector('.lane-name').textContent = name;
+    lanesBox.appendChild(row);
+    return row;
+  }
+
+  function renderLanes() {
+    var vmax = 1;
+    lanes.forEach(function (l) { if (l.b3 > vmax) vmax = l.b3; });
+    if (laneLive && laneLive.b3 > vmax) vmax = laneLive.b3;
+    var all = laneLive ? lanes.concat([laneLive]) : lanes;
+    all.forEach(function (l) {
+      var segs = l.el.querySelectorAll('span');
+      segs[0].style.width = (l.b1 / vmax * 100) + '%';
+      segs[1].style.width = ((l.b2 - l.b1) / vmax * 100) + '%';
+      segs[2].style.width = ((l.b3 - l.b2) / vmax * 100) + '%';
+      l.el.querySelector('.lane-total').textContent = fmtS(l.b3);
+    });
+  }
+
+  function setStat(id, sub, val, subVal) {
+    var e = $(id);
+    if (e) e.textContent = val;
+    var s = sub ? $(sub) : null;
+    if (s) s.textContent = subVal || '';
+  }
+
+  function phaseMarkup(tk, outChars) {
+    var pre = document.createElement('div');
+    pre.className = 'term-phase';
+    pre.innerHTML = '⏳ 预填充上下文 <b class="tabular-nums"></b> <span class="text-muted"></span>';
+    var prog = document.createElement('div');
+    prog.className = 'progress';
+    prog.setAttribute('role', 'progressbar');
+    prog.setAttribute('aria-label', '预填充进度');
+    prog.innerHTML = '<div class="progress-bar" style="width:0%"></div>';
+    var think = document.createElement('div');
+    think.className = 'think-block';
+    think.style.display = 'none';
+    var ans = document.createElement('div');
+    ans.className = 'answer-text';
+    var body = document.createElement('span');
+    body.className = 'ans-body';
+    var caret = document.createElement('span');
+    caret.className = 'caret';
+    caret.innerHTML = '&nbsp;';
+    ans.appendChild(body);
+    ans.appendChild(caret);
+    term.appendChild(pre);
+    term.appendChild(prog);
+    term.appendChild(think);
+    term.appendChild(ans);
+    return {
+      pre: pre, prog: prog, think: think, ans: ans, ansBody: body,
+      preLabel: pre.querySelector('b'), preSub: pre.querySelector('.text-muted')
+    };
+  }
+
+  function startRun() {
+    if (run) { // 停止
+      clearInterval(iv);
+      finishRun(true);
+      return;
+    }
+    var sc = TABS[state.tab];
+    var tier = sc.cloud ? null : tierOf(state.tab, state.tier);
+    var tk = TASKS[state.task];
+    var tg = sc.cloud ? sc.tg : tier.tg;
+    var outChars = tk.chars === Infinity ? ANSWER.length : Math.min(tk.chars, ANSWER.length);
+    var b1 = sc.cloud ? sc.prefillS : tier.ctx / tier.pp;
+    var b2 = b1 + tk.think / tg;
+    var b3 = b2 + outChars / CHARS_PER_TOKEN / tg;
+
+    term.innerHTML = '';
+    var u = document.createElement('div');
+    u.className = 'term-user';
+    u.textContent = '任务：把这套系统的速度讲清楚（' + TASKS[state.task].label + ' · ' + outChars + ' 字 · 思考预算 ' + tk.think + ' token）';
+    term.appendChild(u);
+    var ui = phaseMarkup(tk, outChars);
+    if (sc.cloud) {
+      ui.preLabel.textContent = fmtS(b1);
+      ui.preSub.textContent = sc.ctxLabel;
+      ui.prog.querySelector('.progress-bar').style.width = '100%';
+    } else {
+      ui.preSub.textContent = tier.k + ' 上下文 · ' + fmtN(tier.pp) + ' tok/s';
+    }
+
+    run = { sc: sc, tier: tier, tg: tg, b1: b1, b2: b2, b3: b3, outChars: outChars, ui: ui, think: tk.think };
+    vNow = 0;
+    vStart = performance.now();
+    laneLive = { name: sc.name + (tier ? ' · ' + tier.k : ''), b1: b1, b2: b2, b3: b3, el: makeLane('') };
+    laneLive.el.querySelector('.lane-name').textContent = laneLive.name;
+    $('sim-run').textContent = '⏹ 停止';
+    iv = setInterval(tick, 60);
+  }
+
+  function tick() {
+    if (!run) { clearInterval(iv); return; }
+    var v = (performance.now() - vStart) / 1000 * state.speed;
+    var r = run, ui = r.ui;
+    // 预填充
+    if (!r.sc.cloud) {
+      var pf = Math.min(1, v / r.b1);
+      ui.prog.querySelector('.progress-bar').style.width = (pf * 100).toFixed(1) + '%';
+      ui.preLabel.textContent = fmtS(Math.min(v, r.b1));
+      if (v < r.b1) ui.preLabel.textContent += ' / ' + fmtS(r.b1);
+    }
+    // 思考
+    if (v >= r.b1) {
+      ui.think.style.display = '';
+      if (v < r.b2) {
+        var th = Math.floor((v - r.b1) * r.tg);
+        ui.think.textContent = '思考中… 已生成约 ' + fmtN(th) + ' / ' + fmtN(r.think) + ' thinking token（不可见，但计时）';
+      } else {
+        ui.think.textContent = '思考完成：共 ' + fmtN(r.think) + ' thinking token';
+        ui.think.style.animation = 'none';
+        ui.think.style.fontStyle = 'normal';
+      }
+    }
+    // 可见输出
+    var chars = v >= r.b2 ? Math.min(r.outChars, Math.floor((v - r.b2) * r.tg * CHARS_PER_TOKEN)) : 0;
+    ui.ansBody.textContent = ANSWER.slice(0, chars);
+    term.scrollTop = term.scrollHeight;
+    // 统计
+    var ttft = Math.min(v, r.b2);
+    setStat('stat-ttft', 'stat-ttft-sub', fmtS(ttft), '预填充 ' + fmtS(r.b1) + ' + 思考 ' + fmtS(r.b2 - r.b1));
+    setStat('stat-tg', 'stat-tg-sub', fmtN(r.tg) + ' tok/s', '≈ ' + Math.round(r.tg * CHARS_PER_TOKEN) + ' 字/秒（人类默读 ' + HUMAN_READ + '）');
+    setStat('stat-elapsed', 'stat-elapsed-sub', fmtS(Math.min(v, r.b3)), '预计总时长 ' + fmtS(r.b3) + ' · ' + state.speed + '× 播放');
+    if (laneLive) renderLanes();
+    if (v >= r.b3) { finishRun(false); return; }
+  }
+
+  function finishRun(stopped) {
+    var r = run;
+    run = null;
+    clearInterval(iv);
+    $('sim-run').textContent = '▶ 运行模拟';
+    if (!r) return;
+    if (laneLive) { lanes.push(laneLive); laneLive = null; renderLanes(); }
+    var sum = document.createElement('div');
+    sum.className = 'term-phase';
+    var waitS = stopped ? '（已中止）' : '';
+    sum.innerHTML = '<b>回合结束' + waitS + '：</b>总耗时 <span class="tabular-nums">' + fmtS(r.b3) + '</span> ＝ 预填充 <span class="tabular-nums">' + fmtS(r.b1) + '</span> ＋ 思考 <span class="tabular-nums">' + fmtS(r.b2 - r.b1) + '</span> ＋ 输出 <span class="tabular-nums">' + fmtS(r.b3 - r.b2) + '</span>。' +
+      '你读完这 ' + fmtN(r.outChars) + ' 字约需 <span class="tabular-nums">' + fmtS(r.outChars / HUMAN_READ) + '</span>（默读 ' + HUMAN_READ + ' 字/秒）。';
+    term.appendChild(sum);
+    term.scrollTop = term.scrollHeight;
+    setStat('stat-elapsed', 'stat-elapsed-sub', fmtS(r.b3), '回合完成');
+  }
+
+  $('sim-run').addEventListener('click', startRun);
+  $('sim-clear').addEventListener('click', function () {
+    lanes = [];
+    lanesBox.innerHTML = '';
+  });
+
+  // 恢复上次选择
+  if (window.zcode && window.zcode.widgetState && window.zcode.widgetState.modelContent) {
+    var m = window.zcode.widgetState.modelContent;
+    if (TABS[m.tab]) {
+      state.tab = m.tab;
+      root.querySelectorAll('.nav-link[data-tab]').forEach(function (b) {
+        var on = b.dataset.tab === state.tab;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      buildTierOptions();
+    }
+    if (TASKS[m.task]) {
+      state.task = m.task;
+      root.querySelectorAll('#sim-task .seg-btn').forEach(function (b) {
+        b.classList.toggle('is-selected', b.dataset.task === m.task);
+      });
+    }
+  }
+})();
+</script>
+
+
+<section class="appendix">
+  <h2>数据从哪来</h2>
+  <p>本模拟器不做编造：本地速度取自 oMLX 在 M5 Ultra（64 核 / 256GB）上公开基准的 2026-10-12 快照，逐档录入；云端与真实 Agent 负载口径见下。解码速度随上下文长度<b>非单调波动</b>是快照里的真实形态（已审计确认数据无误），模拟器如实呈现、不做平滑。</p>
+  <table>
+    <tr><th>运行环境</th><th>上下文</th><th>预填充 tok/s</th><th>解码 tok/s</th></tr>
+    <tr><td>M5 Ultra · GLM-5.3-Flash-oQ4e（4bit）</td><td class="num">1K</td><td class="num">459</td><td class="num">37.3</td></tr>
+    <tr><td>M5 Ultra · GLM-5.3-Flash-oQ4e（4bit）</td><td class="num">16K</td><td class="num">1,971</td><td class="num">99.1</td></tr>
+    <tr><td>M5 Ultra · GLM-5.3-Flash-oQ4e（4bit）</td><td class="num">195K</td><td class="num">1,835</td><td class="num">42.6</td></tr>
+    <tr><td>M5 Ultra · Qwen3.8-Flash-Next-oQ4e</td><td class="num">128K</td><td class="num">4,560</td><td class="num">129.0</td></tr>
+    <tr><td>云端 GLM-5.3-Flash / FlashX</td><td class="num">128K 缓存命中</td><td class="num">—</td><td class="num">60 / 200（口径）</td></tr>
+    <tr><td>你本机 ZCode 真实 Agent 任务（会话压缩）</td><td class="num">—</td><td class="num">—</td><td class="num">≈111 端到端（中位）</td></tr>
+  </table>
+  <p>换算口径：1 token ≈ 1.67 个汉字（大词表模型）；人类默读 ≈ 10 字/秒。云端首字等待 0.8~1.0 秒为建模假设。完整 8 档数据与实现说明见仓库 README。</p>
+</section>
+
+<footer>
+  数据快照：oMLX 公开基准（M5 Ultra 64c/256GB，4bit 量化）· 模拟器：<a href="https://github.com/Linwei-Chen/agent-speed-simulator">GitHub 仓库</a> · 仅供体感参考，非基准测试
+</footer>
+</div>
+</body>
+</html>
